@@ -30,15 +30,9 @@ const Mobius = {
   trail: [],
   trailMax: 18,
 
-  // 高級橘：琥珀金 ↔ 深銅，窄色域低飽和
+  // 統一琥珀色
   colorForU(t) {
-    const w = Math.sin(t * Math.PI * 2);
-    // 深銅 [178,90,52] ↔ 琥珀金 [218,148,90]
-    return [
-      198 + 20 * w,   // R: 178~218
-      119 + 29 * w,   // G: 90~148
-      71 + 19 * w,    // B: 52~90
-    ];
+    return [198, 119, 71];
   },
 
   // 莫比烏斯帶參數方程
@@ -321,16 +315,25 @@ const Video = Mobius;
 // =========================================================
 const Particles = {
   container: $("#particles"),
-  colors: ["#e8734a", "#f4956c", "#f8c49c", "#fde2c8", "#e8a87c", "#d4603a"],
+  colors: ["#e8734a", "#f4956c", "#ffd4b0", "#ffffff", "#ffb88c"],
 
   spawn(x) {
-    const el = document.createElement("div");
-    el.className = "particle";
-    el.style.left = x + "px";
-    el.style.bottom = "0";
-    el.style.background = this.colors[Math.floor(Math.random() * this.colors.length)];
-    this.container.appendChild(el);
-    setTimeout(() => el.remove(), 700);
+    const count = 2 + Math.floor(Math.random() * 3); // 2~4 顆
+    for (let i = 0; i < count; i++) {
+      const el = document.createElement("div");
+      el.className = "particle";
+      el.style.left = (x + (Math.random() - 0.5) * 24) + "px";
+      el.style.bottom = "0";
+      const c = this.colors[Math.floor(Math.random() * this.colors.length)];
+      el.style.background = c;
+      el.style.color = c;
+      const size = 2 + Math.random() * 2.5;
+      el.style.width = size + "px";
+      el.style.height = size + "px";
+      el.style.animationDuration = (0.8 + Math.random() * 0.5) + "s";
+      this.container.appendChild(el);
+      setTimeout(() => el.remove(), 1400);
+    }
   },
 };
 
@@ -431,17 +434,107 @@ const Msg = {
 };
 
 // =========================================================
-//  側邊欄
+//  知識庫文件瀏覽
 // =========================================================
-const Sidebar = {
-  list: $("#sidebar-list"),
+const Docs = {
+  list: $("#docs-list"),
+  viewer: $("#doc-viewer"),
+  viewerTitle: $("#doc-viewer-title"),
+  viewerBody: $("#doc-viewer-body"),
+  chatScroll: $("#chat-scroll"),
+  inputArea: null,
+  currentFile: null,
 
-  add(title) {
-    $$(".conv-item").forEach((el) => el.classList.remove("active"));
-    const el = document.createElement("div");
-    el.className = "conv-item active";
-    el.textContent = title.length > 26 ? title.slice(0, 26) + "…" : title;
-    this.list.prepend(el);
+  async loadList() {
+    try {
+      const res = await fetch("/api/docs");
+      const docs = await res.json();
+      this.list.innerHTML = "";
+      docs.forEach((doc) => {
+        const el = document.createElement("div");
+        el.className = "doc-item";
+        el.innerHTML = `<span class="doc-dot"></span><span>${doc.title}</span>`;
+        el.addEventListener("click", () => { this.open(doc.filename, doc.title, el); Mode.set("docs"); });
+        this.list.appendChild(el);
+      });
+    } catch (e) {
+      this.list.innerHTML = `<div style="padding:12px;color:var(--text-dim);font-size:13px;">無法載入文件列表</div>`;
+    }
+  },
+
+  // 開啟指定文件
+  async open(filename, title, itemEl) {
+    this.currentFile = filename;
+    $$(".doc-item").forEach((el) => el.classList.remove("active"));
+    if (itemEl) itemEl.classList.add("active");
+
+    this.viewerTitle.textContent = title;
+    this.viewerBody.innerHTML = `<div class="thinking-dots" style="padding:20px 0;"><span></span><span></span><span></span></div>`;
+
+    this.viewer.classList.remove("hidden");
+    this.chatScroll.style.display = "none";
+    if (!this.inputArea) this.inputArea = document.querySelector(".input-area");
+    this.inputArea.style.display = "none";
+
+    try {
+      const res = await fetch(`/api/docs/${encodeURIComponent(filename)}`);
+      const data = await res.json();
+      this.viewerBody.innerHTML = marked.parse(data.content);
+    } catch (e) {
+      this.viewerBody.innerHTML = `<p style="color:#f87171;">載入失敗：${e.message}</p>`;
+    }
+  },
+
+  // 切回聊天模式
+  toChat() {
+    this.currentFile = null;
+    this.viewer.classList.add("hidden");
+    this.chatScroll.style.display = "";
+    if (!this.inputArea) this.inputArea = document.querySelector(".input-area");
+    this.inputArea.style.display = "";
+    $$(".doc-item").forEach((el) => el.classList.remove("active"));
+    Mode.set("chat");
+  },
+};
+
+// =========================================================
+//  模式切換（對話 / 文件）
+// =========================================================
+const Mode = {
+  btn: null,
+  current: "chat", // "chat" or "docs"
+
+  init() {
+    this.btn = $("#mode-btn");
+    this.btn.addEventListener("click", () => this.toggle());
+  },
+
+  toggle() {
+    if (this.current === "chat") {
+      this.set("docs");
+      // 顯示文件模式：如果側邊欄有文件，自動開第一份
+      const firstDoc = document.querySelector(".doc-item");
+      if (firstDoc && !Docs.currentFile) firstDoc.click();
+    } else {
+      Docs.toChat();
+    }
+  },
+
+  set(mode) {
+    this.current = mode;
+    this.btn.dataset.mode = mode;
+    const label = this.btn.querySelector(".mode-label");
+    const iconDocs = this.btn.querySelector(".icon-docs");
+    const iconChat = this.btn.querySelector(".icon-chat");
+    if (mode === "docs") {
+      label.textContent = "對話";
+      iconDocs.style.display = "none";
+      iconChat.style.display = "";
+    } else {
+      label.textContent = "文件";
+      iconDocs.style.display = "";
+      iconChat.style.display = "none";
+    }
   },
 };
 
@@ -459,10 +552,8 @@ async function sendMessage(text) {
   // 使用者訊息
   Msg.addUser(text);
 
-  // 側邊欄（第一條訊息時加入）
-  if (Msg.container.querySelectorAll(".message").length <= 1) {
-    Sidebar.add(text);
-  }
+  // 如果正在看文件，自動關閉回到聊天
+  if (Docs.currentFile) Docs.toChat();
 
   // 思考中 + 切換影片
   Msg.addThinking();
@@ -540,7 +631,7 @@ function newChat() {
   $("#messages").innerHTML = "";
   const welcome = $("#welcome");
   if (welcome) welcome.classList.remove("hidden");
-  $$(".conv-item").forEach((el) => el.classList.remove("active"));
+  if (Docs.currentFile) Docs.toChat();
 }
 
 // =========================================================
@@ -610,11 +701,14 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
-  // 新對話
-  $("#new-chat-btn").addEventListener("click", newChat);
-
   // 側邊欄開合
   $("#toggle-sidebar").addEventListener("click", () => {
     $("#sidebar").classList.toggle("collapsed");
   });
+
+  // 模式切換
+  Mode.init();
+
+  // 載入知識庫文件列表
+  Docs.loadList();
 });

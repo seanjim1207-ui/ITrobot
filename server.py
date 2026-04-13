@@ -223,6 +223,47 @@ async def reload_knowledge():
     return JSONResponse({"status": "ok", "doc_count": doc_count})
 
 
+@app.get("/api/docs")
+async def list_docs():
+    """列出所有知識庫文件"""
+    if not DOCS_DIR.exists():
+        return JSONResponse([])
+
+    docs = []
+    for md_file in sorted(DOCS_DIR.glob("*.md")):
+        raw = md_file.read_text(encoding="utf-8")
+        title = md_file.stem
+        fm_match = re.match(r"^---\s*\n([\s\S]*?)\n---\s*\n", raw)
+        if fm_match:
+            title_match = re.search(r"title:\s*(.+)", fm_match.group(1))
+            if title_match:
+                title = title_match.group(1).strip()
+        docs.append({"filename": md_file.name, "title": title})
+    return JSONResponse(docs)
+
+
+@app.get("/api/docs/{filename}")
+async def get_doc(filename: str):
+    """取得單一文件內容（去掉 frontmatter）"""
+    file_path = DOCS_DIR / filename
+    if not file_path.exists() or not file_path.suffix == ".md":
+        return JSONResponse({"error": "找不到文件"}, status_code=404)
+
+    raw = file_path.read_text(encoding="utf-8")
+    content = raw
+    title = file_path.stem
+
+    fm_match = re.match(r"^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$", raw)
+    if fm_match:
+        fm_text = fm_match.group(1)
+        content = fm_match.group(2)
+        title_match = re.search(r"title:\s*(.+)", fm_text)
+        if title_match:
+            title = title_match.group(1).strip()
+
+    return JSONResponse({"title": title, "content": content.strip()})
+
+
 # ===== 靜態檔案 & 首頁 =====
 app.mount("/css", StaticFiles(directory="css"), name="css")
 app.mount("/js", StaticFiles(directory="js"), name="js")
