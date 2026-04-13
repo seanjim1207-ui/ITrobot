@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>工作交接問答機器人</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <!-- 背景光暈 -->
+  <div class="ambient-bg">
+    <div class="ambient-orb orb-1"></div>
+    <div class="ambient-orb orb-2"></div>
+    <div class="ambient-orb orb-3"></div>
+  </div>
+
+  <div class="chat-app">
+    <!-- 左側邊欄：影片 + 對話列表 -->
+    <aside class="sidebar" id="sidebar">
+      <!-- 莫比烏斯帶 Möbius Strip -->
+      <div class="mobius-panel" id="mobius-panel">
+        <canvas class="mobius-canvas" id="mobius-canvas"></canvas>
+      </div>
+
+      <div class="sidebar-top">
+        <button class="new-chat-btn" id="new-chat-btn">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+          新對話
+        </button>
+      </div>
+      <div class="sidebar-list" id="sidebar-list"></div>
+      <div class="sidebar-bottom">
+        <div class="model-badge">
+          <span class="model-dot"></span>
+          <span id="model-name">Ollama</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- 主聊天區 -->
+    <div class="chat-main">
+      <!-- 頂部列 -->
+      <header class="topbar">
+        <button class="toggle-btn" id="toggle-sidebar">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+        </button>
+        <span class="topbar-title">工作交接問答</span>
+      </header>
+
+      <!-- 訊息容器 -->
+      <div class="chat-scroll" id="chat-scroll">
+        <!-- 歡迎畫面 -->
+        <div class="welcome" id="welcome">
+          <div class="samantha-ring">
+            <div class="ring-inner"></div>
+          </div>
+          <h2>Hi，有什麼我能幫你的？</h2>
+          <p>關於工作交接的任何問題，都可以問我</p>
+          <div class="suggestions">
+            <button class="suggest-btn" data-q="這個專案的技術架構是什麼？">專案架構</button>
+            <button class="suggest-btn" data-q="部署流程怎麼操作？">部署流程</button>
+            <button class="suggest-btn" data-q="帳號權限怎麼申請？">帳號權限</button>
+          </div>
+        </div>
+
+        <!-- 訊息列表 -->
+        <div class="messages" id="messages"></div>
+      </div>
+
+      <!-- 輸入區 -->
+      <div class="input-area">
+        <div class="particles" id="particles"></div>
+        <div class="input-box" id="input-box">
+          <textarea id="user-input" placeholder="想問什麼..." rows="1"></textarea>
+          <button class="send-btn" id="send-btn" disabled>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <path d="M5 12h14M12 5l7 7-7 7"/>
+            </svg>
+          </button>
+        </div>
+        <p class="input-hint">Enter 送出 / Shift+Enter 換行</p>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
