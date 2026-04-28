@@ -7,6 +7,115 @@ const uuid = () => crypto.randomUUID?.() || Date.now().toString(36) + Math.rando
 const State = {
   sessionId: uuid(),
   streaming: false,
+  abortController: null,
+};
+
+// ===== 打字機（逐字顯示） =====
+const Typewriter = {
+  buffer: "",
+  displayed: "",
+  contentEl: null,
+  timer: null,
+  charsPerTick: 1,   // 每 tick 顯示幾個字
+  tickMs: 22,        // tick 間隔（ms），越大越慢
+
+  start(contentEl) {
+    this.reset();
+    this.contentEl = contentEl;
+  },
+
+  append(text) {
+    this.buffer += text;
+    if (!this.timer) this.run();
+  },
+
+  run() {
+    this.timer = setInterval(() => {
+      if (!this.contentEl) { this.stop(); return; }
+      const remaining = this.buffer.length - this.displayed.length;
+      if (remaining <= 0) {
+        this.stop();
+        return;
+      }
+      // 若後端一次給很多（緩衝堆積），加快吐字避免延遲感
+      const step = remaining > 80 ? 3 : (remaining > 30 ? 2 : this.charsPerTick);
+      this.displayed = this.buffer.slice(0, this.displayed.length + step);
+      this.render();
+    }, this.tickMs);
+  },
+
+  render() {
+    if (!this.contentEl) return;
+    this.contentEl.innerHTML = marked.parse(this.displayed) + '<span class="streaming-cursor"></span>';
+    Msg.scroll();
+  },
+
+  // 立刻把剩下全部吐完（完成或中斷時用）
+  flush() {
+    if (this.contentEl) {
+      this.displayed = this.buffer;
+      this.contentEl.innerHTML = marked.parse(this.displayed);
+    }
+    this.stop();
+  },
+
+  stop() {
+    clearInterval(this.timer);
+    this.timer = null;
+  },
+
+  reset() {
+    this.stop();
+    this.buffer = "";
+    this.displayed = "";
+    this.contentEl = null;
+  },
+};
+
+// ===== 建議問題：從知識庫標題衍生 =====
+const FollowupEngine = {
+  recentlyUsed: [],  // 避免短時間重複
+
+  // 把標題包裝成自然問句
+  phraseAsQuestion(title) {
+    const templates = [
+      (t) => `${t} 怎麼處理？`,
+      (t) => `想了解 ${t} 的流程`,
+      (t) => `${t} 有什麼要注意的？`,
+      (t) => `${t} 該怎麼做？`,
+      (t) => `能說明一下 ${t} 嗎？`,
+    ];
+    const tpl = templates[Math.floor(Math.random() * templates.length)];
+    return tpl(title);
+  },
+
+  pick(currentQuestion = "") {
+    const docs = (Docs.allDocs || []).filter((d) => d && d.title);
+    if (docs.length === 0) {
+      // 知識庫還沒載入：用 fallback
+      return "能再講得更詳細一點嗎？";
+    }
+
+    // 過濾掉：近期用過的、跟目前提問標題一樣的
+    const cq = currentQuestion.toLowerCase();
+    let pool = docs.filter((d) => {
+      const t = d.title;
+      if (this.recentlyUsed.includes(t)) return false;
+      if (cq && cq.includes(t.toLowerCase())) return false;
+      return true;
+    });
+
+    if (pool.length === 0) {
+      this.recentlyUsed = [];
+      pool = docs;
+    }
+
+    const pick = pool[Math.floor(Math.random() * pool.length)];
+    this.recentlyUsed.push(pick.title);
+    if (this.recentlyUsed.length > 5) this.recentlyUsed.shift();
+
+    return this.phraseAsQuestion(pick.title);
+  },
 };
 
 // =========================================================
@@ -30,9 +139,37 @@ const Mobius = {
   trail: [],
   trailMax: 18,
 
-  // 統一琥珀色
+  // 高級漸層色帶 — 平滑多色帶漸變
   colorForU(t) {
-    return [198, 119, 71];
+    // t: 0~1 沿莫比烏斯帶一圈
+    // 琥珀 → 珊瑚 → 玫瑰金 → 深銅 → 琥珀（循環）
+    const stops = [
+      { at: 0.00, c: [198, 130, 80]  },  // 暖琥珀
+      { at: 0.25, c: [220, 110, 65]  },  // 珊瑚
+      { at: 0.45, c: [195, 105, 95]  },  // 玫瑰金
+      { at: 0.65, c: [170, 95, 75]   },  // 深銅
+      { at: 0.85, c: [210, 125, 70]  },  // 暖橘
+      { at: 1.00, c: [198, 130, 80]  },  // 回到琥珀
+    ];
+
+    // 環形處理：確保 t 永遠落在 [0, 1) 內，首尾無縫
+    t = ((t % 1) + 1) % 1;
+
+    // 找到 t 所在的區段並插值
+    for (let i = 0; i < stops.length - 1; i++) {
+      if (t >= stops[i].at && t <= stops[i + 1].at) {
+        const span = stops[i + 1].at - stops[i].at;
+        const p = span > 0 ? (t - stops[i].at) / span : 0;
+        const smooth = p * p * (3 - 2 * p); // smoothstep
+        const c0 = stops[i].c, c1 = stops[i + 1].c;
+        return [
+          c0[0] + (c1[0] - c0[0]) * smooth,
+          c0[1] + (c1[1] - c0[1]) * smooth,
+          c0[2] + (c1[2] - c0[2]) * smooth,
+        ];
+      }
+    }
+    return stops[0].c;
   },
 
   // 莫比烏斯帶參數方程
@@ -155,7 +292,7 @@ const Mobius = {
         const bx = p01[0]-p00[0], by = p01[1]-p00[1], bz = p01[2]-p00[2];
         const nx = ay*bz - az*by, ny = az*bx - ax*bz, nz = ax*by - ay*bx;
         const nl = Math.sqrt(nx*nx + ny*ny + nz*nz) || 1;
-        const light = nx/nl*0.3 + ny/nl*-0.4 + nz/nl*0.85;
+        const light = Math.abs(nx/nl*0.3 + ny/nl*-0.4 + nz/nl*0.85);
         const brightness = Math.max(0.18, Math.min(1, 0.45 + light * 0.55));
 
         faces.push({ pts: [s00, s10, s11, s01], z: avgZ, brightness, orbGlow, vIdx: j, vSteps, baseColor });
@@ -396,7 +533,7 @@ const Msg = {
     el.className = "message bot-msg";
     el.id = "thinking";
     el.innerHTML = `
-      <div class="msg-avatar bot"><svg viewBox="0 0 32 32" width="20" height="20"><defs><linearGradient id="wave-g" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#fff"/><stop offset="100%" stop-color="#ffd4b0"/></linearGradient></defs><path d="M4 18 C7 12, 10 12, 13 16 S19 22, 22 16 S25 10, 28 14" fill="none" stroke="url(#wave-g)" stroke-width="2.8" stroke-linecap="round"/><circle cx="28" cy="14" r="1.8" fill="#fff" opacity="0.9"/></svg></div>
+      <div class="msg-avatar bot"><svg viewBox="0 0 32 32" width="20" height="20"><defs><linearGradient id="av-wg" x1="0" y1="16" x2="32" y2="16" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#fff"/><stop offset="50%" stop-color="#ffd4b0"/><stop offset="100%" stop-color="#fff"/></linearGradient></defs><path d="M4 16C8 8,12 8,16 16S24 24,28 16" fill="none" stroke="url(#av-wg)" stroke-width="2.8" stroke-linecap="round"/><circle cx="28" cy="16" r="2" fill="#fff" opacity="0.95"/><circle cx="28" cy="16" r="3.5" fill="none" stroke="#fff" opacity="0.3" stroke-width="0.8"/></svg></div>
       <div class="msg-body">
         <div class="msg-name">波</div>
         <div class="msg-content">
@@ -417,7 +554,7 @@ const Msg = {
     el.className = "message bot-msg";
     el.id = "stream-msg";
     el.innerHTML = `
-      <div class="msg-avatar bot"><svg viewBox="0 0 32 32" width="20" height="20"><defs><linearGradient id="wave-g" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#fff"/><stop offset="100%" stop-color="#ffd4b0"/></linearGradient></defs><path d="M4 18 C7 12, 10 12, 13 16 S19 22, 22 16 S25 10, 28 14" fill="none" stroke="url(#wave-g)" stroke-width="2.8" stroke-linecap="round"/><circle cx="28" cy="14" r="1.8" fill="#fff" opacity="0.9"/></svg></div>
+      <div class="msg-avatar bot"><svg viewBox="0 0 32 32" width="20" height="20"><defs><linearGradient id="av-wg" x1="0" y1="16" x2="32" y2="16" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#fff"/><stop offset="50%" stop-color="#ffd4b0"/><stop offset="100%" stop-color="#fff"/></linearGradient></defs><path d="M4 16C8 8,12 8,16 16S24 24,28 16" fill="none" stroke="url(#av-wg)" stroke-width="2.8" stroke-linecap="round"/><circle cx="28" cy="16" r="2" fill="#fff" opacity="0.95"/><circle cx="28" cy="16" r="3.5" fill="none" stroke="#fff" opacity="0.3" stroke-width="0.8"/></svg></div>
       <div class="msg-body">
         <div class="msg-name">波</div>
         <div class="msg-content"><span class="streaming-cursor"></span></div>
@@ -425,6 +562,47 @@ const Msg = {
     this.container.appendChild(el);
     this.scroll();
     return el.querySelector(".msg-content");
+  },
+
+  addSources(contentEl, sources) {
+    const msgBody = contentEl.closest(".msg-body");
+    if (!msgBody || !sources || sources.length === 0) return;
+    if (msgBody.querySelector(".msg-sources")) return;
+    const wrap = document.createElement("div");
+    wrap.className = "msg-sources";
+    const label = document.createElement("span");
+    label.className = "msg-sources-label";
+    label.textContent = "📄 取自：";
+    wrap.appendChild(label);
+    sources.forEach((src) => {
+      const chip = document.createElement("button");
+      chip.className = "source-chip";
+      chip.textContent = src.title;
+      chip.title = `開啟「${src.title}」`;
+      chip.addEventListener("click", () => {
+        const item = document.querySelector(`.doc-item[data-filename="${src.filename}"]`);
+        Docs.open(src.filename, src.title, item);
+        Mode.set("docs");
+      });
+      wrap.appendChild(chip);
+    });
+    msgBody.appendChild(wrap);
+    this.scroll();
+  },
+
+  addFollowup(contentEl, question) {
+    const msgBody = contentEl.closest(".msg-body");
+    if (!msgBody) return;
+    // 避免重複加
+    if (msgBody.querySelector(".followup-suggest")) return;
+    const btn = document.createElement("button");
+    btn.className = "followup-suggest";
+    btn.textContent = question;
+    btn.addEventListener("click", () => {
+      if (!State.streaming) sendMessage(question);
+    });
+    msgBody.appendChild(btn);
+    this.scroll();
   },
 
   scroll() {
@@ -445,21 +623,69 @@ const Docs = {
   inputArea: null,
   currentFile: null,
 
+  allDocs: [],
+  searchTimer: null,
+
+  renderList(items) {
+    this.list.innerHTML = "";
+    if (items.length === 0) {
+      this.list.innerHTML = `<div style="padding:12px;color:var(--text-dim);font-size:12.5px;">沒有符合的文件</div>`;
+      return;
+    }
+    items.forEach((doc) => {
+      const el = document.createElement("div");
+      el.className = "doc-item";
+      el.dataset.filename = doc.filename;
+      const snippetHtml = doc.snippet
+        ? `<div class="doc-snippet">${this.escapeHtml(doc.snippet)}</div>`
+        : "";
+      el.innerHTML = `
+        <div class="doc-row">
+          <span class="doc-dot"></span>
+          <span class="doc-title">${this.escapeHtml(doc.title)}</span>
+        </div>
+        ${snippetHtml}`;
+      el.addEventListener("click", () => { this.open(doc.filename, doc.title, el); Mode.set("docs"); });
+      this.list.appendChild(el);
+    });
+  },
+
+  escapeHtml(s) {
+    const d = document.createElement("div");
+    d.textContent = s;
+    return d.innerHTML;
+  },
+
   async loadList() {
     try {
       const res = await fetch("/api/docs");
-      const docs = await res.json();
-      this.list.innerHTML = "";
-      docs.forEach((doc) => {
-        const el = document.createElement("div");
-        el.className = "doc-item";
-        el.innerHTML = `<span class="doc-dot"></span><span>${doc.title}</span>`;
-        el.addEventListener("click", () => { this.open(doc.filename, doc.title, el); Mode.set("docs"); });
-        this.list.appendChild(el);
-      });
+      this.allDocs = await res.json();
+      this.renderList(this.allDocs);
     } catch (e) {
       this.list.innerHTML = `<div style="padding:12px;color:var(--text-dim);font-size:13px;">無法載入文件列表</div>`;
     }
+  },
+
+  filter(keyword) {
+    const kw = keyword.trim();
+    clearTimeout(this.searchTimer);
+
+    // 沒輸入：顯示全部
+    if (!kw) {
+      this.renderList(this.allDocs);
+      return;
+    }
+
+    // debounce 呼叫後端搜尋
+    this.searchTimer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/search?q=${encodeURIComponent(kw)}`);
+        const data = await res.json();
+        this.renderList(data.results || []);
+      } catch {
+        this.list.innerHTML = `<div style="padding:12px;color:#f87171;font-size:13px;">搜尋失敗</div>`;
+      }
+    }, 200);
   },
 
   // 開啟指定文件
@@ -494,6 +720,58 @@ const Docs = {
     this.inputArea.style.display = "";
     $$(".doc-item").forEach((el) => el.classList.remove("active"));
     Mode.set("chat");
+  },
+};
+
+// =========================================================
+//  Ollama 連線狀態
+// =========================================================
+const Health = {
+  badge: null,
+  label: null,
+  timer: null,
+
+  init() {
+    this.badge = $("#ollama-status");
+    this.label = $("#model-name");
+    this.check();
+    this.timer = setInterval(() => this.check(), 15000);
+  },
+
+  async check() {
+    try {
+      const res = await fetch("/api/health");
+      if (!res.ok) {
+        this.set("offline", "請重啟 server");
+        return;
+      }
+      const data = await res.json();
+      if (data.ollama === "online") {
+        if (data.model_ready) {
+          this.set("online", `Ollama · ${data.model || ""}`);
+        } else {
+          this.set("loading", `需下載 ${data.model || "模型"}`);
+        }
+      } else if (data.ollama === "offline") {
+        this.set("offline", "Ollama 未啟動");
+      } else {
+        this.set("offline", `Ollama ${data.status_code || "錯誤"}`);
+      }
+    } catch {
+      this.set("offline", "伺服器離線");
+    }
+  },
+
+  set(status, text) {
+    if (!this.badge) return;
+    this.badge.dataset.status = status;
+    if (this.label) this.label.textContent = text;
+    this.badge.title = {
+      online: "Ollama 正常運行",
+      loading: "模型尚未下載，請執行 ollama pull",
+      offline: "Ollama 未啟動，請執行 ollama serve",
+      checking: "檢查中…",
+    }[status] || "";
   },
 };
 
@@ -544,6 +822,7 @@ const Mode = {
 async function sendMessage(text) {
   if (State.streaming || !text.trim()) return;
   State.streaming = true;
+  State.abortController = new AbortController();
 
   // 隱藏歡迎畫面
   const welcome = $("#welcome");
@@ -560,19 +839,26 @@ async function sendMessage(text) {
   Video.toAnswer();
   updateSendBtn();
 
+  let contentEl = null;
+  let fullText = "";
+  let aborted = false;
+  let sources = [];
+
   try {
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: text, session_id: State.sessionId }),
+      signal: State.abortController.signal,
     });
 
     Msg.removeThinking();
-    const contentEl = Msg.addBotStream();
+    contentEl = Msg.addBotStream();
+    Typewriter.start(contentEl);
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
-    let fullText = "";
+    let done_received = false;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -586,34 +872,83 @@ async function sendMessage(text) {
         const data = line.slice(6);
 
         if (data === "[DONE]") {
-          // 完成：渲染最終 markdown，移除游標
-          contentEl.innerHTML = marked.parse(fullText);
-          Video.onStreamDone();
+          done_received = true;
           break;
+        }
+
+        if (data.startsWith("[SOURCES] ")) {
+          try { sources = JSON.parse(data.slice(10)); } catch { sources = []; }
+          continue;
         }
 
         if (data.startsWith("[ERROR]")) {
           fullText += data.slice(8);
+          Typewriter.stop();
           contentEl.innerHTML = `<p style="color:#f87171;">${Msg.escapeHtml(fullText)}</p>`;
           Video.onStreamDone();
           break;
         }
 
-        try { fullText += JSON.parse(data); } catch { fullText += data; }
-        contentEl.innerHTML = marked.parse(fullText) + '<span class="streaming-cursor"></span>';
-        Msg.scroll();
+        let token = "";
+        try { token = JSON.parse(data); } catch { token = data; }
+        fullText += token;
+        Typewriter.append(token);
       }
+      if (done_received) break;
     }
+
+    // 等打字機把 buffer 跑完（最多等 2 秒，避免卡住）
+    await new Promise((resolve) => {
+      const startTime = Date.now();
+      const wait = setInterval(() => {
+        if (Typewriter.displayed.length >= Typewriter.buffer.length || Date.now() - startTime > 2000) {
+          clearInterval(wait);
+          Typewriter.flush();
+          Video.onStreamDone();
+          resolve();
+        }
+      }, 50);
+    });
   } catch (err) {
-    Msg.removeThinking();
-    const contentEl = Msg.addBotStream();
-    contentEl.innerHTML = `<p style="color:#f87171;">連線錯誤：${Msg.escapeHtml(err.message)}。請確認伺服器與 Ollama 已啟動。</p>`;
-    Video.onStreamDone();
+    if (err.name === "AbortError") {
+      aborted = true;
+      Typewriter.stop();
+      if (!contentEl) {
+        Msg.removeThinking();
+        contentEl = Msg.addBotStream();
+      }
+      contentEl.innerHTML = marked.parse(fullText || "") +
+        '<p style="color:var(--text-dim); font-size:12px; margin-top:6px;">⏸ 已停止生成</p>';
+      Video.onStreamDone();
+    } else {
+      Typewriter.stop();
+      Msg.removeThinking();
+      if (!contentEl) contentEl = Msg.addBotStream();
+      contentEl.innerHTML = `<p style="color:#f87171;">連線錯誤：${Msg.escapeHtml(err.message)}。請確認伺服器與 Ollama 已啟動。</p>`;
+      Video.onStreamDone();
+    }
+  }
+
+  // 顯示來源（先放，followup 在它後面）
+  if (!aborted && contentEl && fullText.trim() && sources && sources.length) {
+    Msg.addSources(contentEl, sources);
+  }
+
+  // 接上 followup 建議（非 abort 且有內容才加）
+  if (!aborted && contentEl && fullText.trim()) {
+    Msg.addFollowup(contentEl, FollowupEngine.pick(text));
   }
 
   State.streaming = false;
+  State.abortController = null;
   updateSendBtn();
   $("#user-input").focus();
+}
+
+function stopGenerating() {
+  if (State.abortController) {
+    State.abortController.abort();
+  }
 }
 
 // =========================================================
@@ -640,7 +975,22 @@ function newChat() {
 function updateSendBtn() {
   const btn = $("#send-btn");
   const input = $("#user-input");
-  btn.disabled = input.value.trim().length === 0 || State.streaming;
+  const iconSend = btn.querySelector(".icon-send");
+  const iconStop = btn.querySelector(".icon-stop");
+
+  if (State.streaming) {
+    btn.disabled = false;
+    btn.classList.add("stopping");
+    btn.title = "停止生成";
+    if (iconSend) iconSend.style.display = "none";
+    if (iconStop) iconStop.style.display = "";
+  } else {
+    btn.disabled = input.value.trim().length === 0;
+    btn.classList.remove("stopping");
+    btn.title = "送出";
+    if (iconSend) iconSend.style.display = "";
+    if (iconStop) iconStop.style.display = "none";
+  }
 }
 
 function autoResize(el) {
@@ -682,10 +1032,14 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // 送出按鈕
+  // 送出 / 停止按鈕
   $("#send-btn").addEventListener("click", () => {
+    if (State.streaming) {
+      stopGenerating();
+      return;
+    }
     const text = input.value.trim();
-    if (text && !State.streaming) {
+    if (text) {
       input.value = "";
       input.style.height = "auto";
       InputFX.glow(false);
@@ -711,4 +1065,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // 載入知識庫文件列表
   Docs.loadList();
+
+  // 知識庫搜尋
+  const searchInput = $("#docs-search");
+  if (searchInput) {
+    searchInput.addEventListener("input", (e) => Docs.filter(e.target.value));
+  }
+
+  // Ollama 狀態檢查
+  Health.init();
 });
