@@ -705,10 +705,25 @@ const Docs = {
     try {
       const res = await fetch(`/api/docs/${encodeURIComponent(filename)}`);
       const data = await res.json();
-      this.viewerBody.innerHTML = marked.parse(data.content);
+      const rendered = marked.parse(data.content);
+      this.viewerBody.innerHTML = `<article class="doc-paper">${rendered}</article>`;
+      this.decorateCallouts();
     } catch (e) {
       this.viewerBody.innerHTML = `<p style="color:#f87171;">載入失敗：${e.message}</p>`;
     }
+  },
+
+  // 把 **症狀:** / **解決方法:** / **常見問題:** 開頭的段落變成 callout box
+  decorateCallouts() {
+    const paragraphs = this.viewerBody.querySelectorAll(".doc-paper p");
+    paragraphs.forEach((p) => {
+      const strong = p.querySelector("strong:first-child");
+      if (!strong) return;
+      const label = strong.textContent.trim().replace(/[:：\s]+$/, "");
+      if (label === "症狀") p.classList.add("callout-symptom");
+      else if (label === "解決方法") p.classList.add("callout-solution");
+      else if (label === "常見問題") p.classList.add("callout-faq");
+    });
   },
 
   // 切回聊天模式
